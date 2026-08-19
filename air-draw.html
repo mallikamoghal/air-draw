@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Air Draw - Ultra Smooth & Stable</title>
+
+  <!-- MediaPipe Dependencies -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    :root {
+      --bg-color: #0b0f19;
+      --panel-bg: rgba(15, 23, 42, 0.95);
+      --accent-color: #38bdf8;
+      --text-color: #f8fafc;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background-color: var(--bg-color); color: var(--text-color); overflow: hidden; height: 100vh; width: 100vw; }
+
+    #app-container { position: relative; width: 100vw; height: 100vh; }
+
+    video {
+      position: absolute; width: 100%; height: 100%; object-fit: cover;
+      transform: scaleX(-1); opacity: 0.15; z-index: 1;
+    }
+
+    #cameraCanvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 2; pointer-events: none; }
+    #paintCanvas { position: absolute; width: 100%; height: 100%; z-index: 3; }
+
+    #ui-panel {
+      position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+      z-index: 10; background: var(--panel-bg);
+      padding: 10px 24px; border-radius: 40px; display: flex; gap: 15px;
+      align-items: center; border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .tool-group { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+    .color-picker { width: 32px; height: 32px; border-radius: 50%; border: 2px solid white; cursor: pointer; background: none; }
+
+    .btn {
+      background: #1e293b; color: white; border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 8px 16px; border-radius: 16px; cursor: pointer; font-weight: 600; font-size: 0.85rem;
+    }
+    .btn-danger { background: #ef4444; }
+
+    #status-card {
+      position: absolute; bottom: 20px; left: 20px; z-index: 10;
+      background: var(--panel-bg); padding: 12px 20px; border-radius: 14px;
+      font-size: 1.1rem; border: 1px solid rgba(255, 255, 255, 0.15); display: flex; align-items: center; gap: 10px;
+    }
+
+    #pointer-indicator {
+      position: absolute; width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent-color); border: 2px solid #ffffff; pointer-events: none;
+      z-index: 100; transform: translate(-50%, -50%);
+      will-change: transform, left, top;
+    }
+
+    #gesture-guide {
+      position: absolute; bottom: 20px; right: 20px; z-index: 10;
+      background: var(--panel-bg); padding: 14px 18px; border-radius: 14px;
+      font-size: 0.9rem; border: 1px solid rgba(255, 255, 255, 0.15); line-height: 1.6;
+    }
+    .guide-item { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .emoji-badge { font-size: 1.3rem; min-width: 30px; text-align: center; }
+
+    #clear-progress-overlay {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 20; pointer-events: none; display: none; flex-direction: column; align-items: center;
+      background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 20px; border: 1px solid #ef4444;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="app-container">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="cameraCanvas"></canvas>
+    <canvas id="paintCanvas"></canvas>
+
+    <div id="pointer-indicator"></div>
+
+    <div id="clear-progress-overlay">
+      <div style="font-size: 3rem;">🧹</div>
+      <div style="color: #ef4444; font-weight: bold; margin-top: 10px;">CLEARING CANVAS...</div>
+    </div>
+
+    <div id="ui-panel">
+      <div class="tool-group">
+        <label for="color">Color:</label>
+        <input type="color" id="color" class="color-picker" value="#38bdf8">
+      </div>
+      <div class="tool-group">
+        <label for="thickness">Size:</label>
+        <input type="range" id="thickness" min="4" max="40" value="8">
+      </div>
+      <button id="clear-btn" class="btn btn-danger">Clear Canvas</button>
+      <button id="save-btn" class="btn">Save Image</button>
+    </div>
+
+    <div id="status-card">
+      <span id="gesture-icon">🔍</span>
+      <span id="gesture-state" style="font-weight: bold; color: var(--accent-color);">Initializing...</span>
+    </div>
+
+    <div id="gesture-guide">
+      <div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">
+        Gesture Controls
+      </div>
+      <div class="guide-item"><span class="emoji-badge">👆</span> Point Index = Draw</div>
+      <div class="guide-item"><span class="emoji-badge">✌️</span> Peace Sign = Hover Pointer</div>
+      <div class="guide-item"><span class="emoji-badge">✊</span> Fist = Eraser</div>
+      <div class="guide-item"><span class="emoji-badge">🖐️</span> Open Hand (Hold 1.5s) = Air Clear</div>
+    </div>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('webcam');
+    const cameraCanvas = document.getElementById('cameraCanvas');
+    const cameraCtx = cameraCanvas.getContext('2d');
+    
+    const paintCanvas = document.getElementById('paintCanvas');
+    const paintCtx = paintCanvas.getContext('2d', { alpha: true, desynchronized: true });
+
+    const statusText = document.getElementById('gesture-state');
+    const statusIcon = document.getElementById('gesture-icon');
+    const colorPicker = document.getElementById('color');
+    const thicknessPicker = document.getElementById('thickness');
+    const pointer = document.getElementById('pointer-indicator');
+    const clearOverlay = document.getElementById('clear-progress-overlay');
+
+    // Advanced Motion Smoothing Variables
+    let rawPos = { x: 0, y: 0 };
+    let smoothPos = { x: 0, y: 0 };
+    let velocity = { x: 0, y: 0 };
+    let strokeBuffer = [];
+    
+    let currentMode = 'NONE';
+    let isHandPresent = false;
+    let openHandHoldTimer = 0;
+    let isProcessing = false;
+
+    // Filters & Deadzone Thresholds
+    const DEADZONE = 3.5;       // Ignores stationary camera jitter
+    const SMOOTH_ALPHA = 0.45;  // Position smoothing weight
+    const SMOOTH_BETA = 0.25;   // Velocity trend prediction weight
+
+    function resizeCanvas() {
+      cameraCanvas.width = window.innerWidth;
+      cameraCanvas.height = window.innerHeight;
+      paintCanvas.width = window.innerWidth;
+      paintCanvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function dist(pt1, pt2) {
+      return Math.hypot(pt1.x - pt2.x, pt1.y - pt2.y);
+    }
+
+    function isFingerExtended(landmarks, tipIdx, mcpIdx) {
+      const wrist = landmarks[0];
+      const tip = landmarks[tipIdx];
+      const mcp = landmarks[mcpIdx];
+      return dist(wrist, tip) > dist(wrist, mcp) * 1.15;
+    }
+
+    function detectGesture(landmarks) {
+      const indexExtended = isFingerExtended(landmarks, 8, 5);
+      const middleExtended = isFingerExtended(landmarks, 12, 9);
+      const ringExtended = isFingerExtended(landmarks, 16, 13);
+      const pinkyExtended = isFingerExtended(landmarks, 20, 17);
+
+      if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) return 'DRAW';
+      if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) return 'MOVE';
+      if (!indexExtended && !middleExtended && !ringExtended && !pinkyExtended) return 'ERASE';
+      if (indexExtended && middleExtended && ringExtended && pinkyExtended) return 'CLEAR_HOLD';
+      return 'PAUSE';
+    }
+
+    function onResults(results) {
+      cameraCtx.clearRect(0, 0, cameraCanvas.width, cameraCanvas.height);
+
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        isHandPresent = false;
+        strokeBuffer = [];
+        currentMode = 'NONE';
+        return;
+      }
+
+      isHandPresent = true;
+      const hand = results.multiHandLandmarks[0];
+
+      // Minimal Skeleton
+      drawConnectors(cameraCtx, hand, HAND_CONNECTIONS, { color: '#00FF66', lineWidth: 1 });
+
+      currentMode = detectGesture(hand);
+      rawPos.x = (1 - hand[8].x) * window.innerWidth;
+      rawPos.y = hand[8].y * window.innerHeight;
+
+      // Initialize positions on first detection frame
+      if (smoothPos.x === 0 && smoothPos.y === 0) {
+        smoothPos.x = rawPos.x;
+        smoothPos.y = rawPos.y;
+      }
+
+      // Double Exponential Filter (Velocity-Aware Smoothing)
+      const dx = rawPos.x - smoothPos.x;
+      const dy = rawPos.y - smoothPos.y;
+      const moveDistance = Math.hypot(dx, dy);
+
+      if (moveDistance > DEADZONE) {
+        const lastSmoothX = smoothPos.x;
+        const lastSmoothY = smoothPos.y;
+
+        smoothPos.x = SMOOTH_ALPHA * rawPos.x + (1 - SMOOTH_ALPHA) * (smoothPos.x + velocity.x);
+        smoothPos.y = SMOOTH_ALPHA * rawPos.y + (1 - SMOOTH_ALPHA) * (smoothPos.y + velocity.y);
+
+        velocity.x = SMOOTH_BETA * (smoothPos.x - lastSmoothX) + (1 - SMOOTH_BETA) * velocity.x;
+        velocity.y = SMOOTH_BETA * (smoothPos.y - lastSmoothY) + (1 - SMOOTH_BETA) * velocity.y;
+      } else {
+        // Friction decay when stationary
+        velocity.x *= 0.2;
+        velocity.y *= 0.2;
+      }
+    }
+
+    // High-Frequency 60FPS Dedicated Render Engine
+    function renderFrame() {
+      if (!isHandPresent) {
+        statusText.innerText = 'Searching Hand...';
+        statusIcon.innerText = '🔍';
+        pointer.style.display = 'none';
+        openHandHoldTimer = 0;
+        clearOverlay.style.display = 'none';
+        strokeBuffer = [];
+      } else {
+        pointer.style.display = 'block';
+        pointer.style.left = `${smoothPos.x}px`;
+        pointer.style.top = `${smoothPos.y}px`;
+
+        const color = colorPicker.value;
+        const thickness = parseInt(thicknessPicker.value, 10);
+
+        if (currentMode === 'CLEAR_HOLD') {
+          openHandHoldTimer++;
+          clearOverlay.style.display = 'flex';
+          statusText.innerText = 'Hold to Clear...';
+          statusIcon.innerText = '🖐️';
+          pointer.style.background = '#ef4444';
+
+          if (openHandHoldTimer > 40) {
+            paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+            openHandHoldTimer = 0;
+            clearOverlay.style.display = 'none';
+          }
+          strokeBuffer = [];
+        } else {
+          openHandHoldTimer = 0;
+          clearOverlay.style.display = 'none';
+
+          if (currentMode === 'DRAW') {
+            statusText.innerText = 'Writing (Ultra Smooth)';
+            statusIcon.innerText = '👆';
+            pointer.style.background = color;
+
+            const currentPt = { x: smoothPos.x, y: smoothPos.y };
+            
+            // Check tracking jumps across screen
+            if (strokeBuffer.length > 0) {
+              const lastPt = strokeBuffer[strokeBuffer.length - 1];
+              if (dist(lastPt, currentPt) > 120) {
+                strokeBuffer = [];
+              }
+            }
+
+            // Only add point if hand actually moves beyond deadzone
+            if (strokeBuffer.length === 0 || dist(strokeBuffer[strokeBuffer.length - 1], currentPt) >= DEADZONE) {
+              strokeBuffer.push(currentPt);
+            }
+
+            // Continuous Quadratic Bézier Spline Interpolation
+            if (strokeBuffer.length >= 2) {
+              paintCtx.save();
+              paintCtx.beginPath();
+
+              const p1 = strokeBuffer[strokeBuffer.length - 2];
+              const p2 = strokeBuffer[strokeBuffer.length - 1];
+
+              if (strokeBuffer.length === 2) {
+                paintCtx.moveTo(p1.x, p1.y);
+                paintCtx.lineTo(p2.x, p2.y);
+              } else {
+                const p0 = strokeBuffer[strokeBuffer.length - 3];
+                const mid1 = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+                const mid2 = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+
+                paintCtx.moveTo(mid1.x, mid1.y);
+                paintCtx.quadraticCurveTo(p1.x, p1.y, mid2.x, mid2.y);
+              }
+
+              paintCtx.strokeStyle = color;
+              paintCtx.lineWidth = thickness;
+              paintCtx.lineCap = 'round';
+              paintCtx.lineJoin = 'round';
+              paintCtx.globalCompositeOperation = 'source-over';
+              paintCtx.stroke();
+              paintCtx.restore();
+            }
+
+          } else if (currentMode === 'ERASE') {
+            statusText.innerText = 'Erasing';
+            statusIcon.innerText = '✊';
+            pointer.style.background = '#ffffff';
+
+            const eraseRadius = thickness * 3;
+            paintCtx.save();
+            paintCtx.beginPath();
+            
+            if (strokeBuffer.length >= 1) {
+              const lastPt = strokeBuffer[strokeBuffer.length - 1];
+              paintCtx.moveTo(lastPt.x, lastPt.y);
+              paintCtx.lineTo(smoothPos.x, smoothPos.y);
+              paintCtx.lineWidth = eraseRadius * 2;
+              paintCtx.lineCap = 'round';
+            } else {
+              paintCtx.arc(smoothPos.x, smoothPos.y, eraseRadius, 0, Math.PI * 2);
+            }
+
+            paintCtx.globalCompositeOperation = 'destination-out';
+            paintCtx.stroke();
+            paintCtx.fill();
+            paintCtx.restore();
+
+            strokeBuffer = [{ x: smoothPos.x, y: smoothPos.y }];
+
+          } else {
+            statusText.innerText = currentMode === 'MOVE' ? 'Hovering' : 'Paused';
+            statusIcon.innerText = currentMode === 'MOVE' ? '✌️' : '🖐️';
+            pointer.style.background = currentMode === 'MOVE' ? '#94a3b8' : '#64748b';
+            strokeBuffer = [];
+          }
+        }
+      }
+
+      requestAnimationFrame(renderFrame);
+    }
+
+    requestAnimationFrame(renderFrame);
+
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.35,
+      minTrackingConfidence: 0.35,
+      selfieMode: false
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        if (!isProcessing) {
+          isProcessing = true;
+          await hands.send({ image: videoElement });
+          isProcessing = false;
+        }
+      },
+      width: 480,
+      height: 360
+    });
+
+    camera.start().catch(() => {
+      statusText.innerText = 'Camera Error!';
+      statusIcon.innerText = '⚠️';
+    });
+
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+    });
+
+    document.getElementById('save-btn').addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'air-draw-art.png';
+      link.href = paintCanvas.toDataURL();
+      link.click();
+    });
+  </script>
+</body>
+</html>
