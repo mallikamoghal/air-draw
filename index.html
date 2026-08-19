@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Air Draw - Ultra Smooth & Stable</title>
+  <title>Air Draw - High Precision Mobile Edition</title>
 
   <!-- MediaPipe Dependencies -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -23,9 +23,11 @@
 
     #app-container { position: relative; width: 100vw; height: 100vh; }
 
+    /* Video background opacity set to 0.60 for optimal detection contrast */
     video {
       position: absolute; width: 100%; height: 100%; object-fit: cover;
-      transform: scaleX(-1); opacity: 0.15; z-index: 1;
+      transform: scaleX(-1); opacity: 0.60; z-index: 1;
+      filter: brightness(1.1) contrast(1.1);
     }
 
     #cameraCanvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 2; pointer-events: none; }
@@ -195,20 +197,19 @@
       isHandPresent = true;
       const hand = results.multiHandLandmarks[0];
 
-      // Minimal Skeleton
-      drawConnectors(cameraCtx, hand, HAND_CONNECTIONS, { color: '#00FF66', lineWidth: 1 });
+      // Draw high-visibility skeleton lines
+      drawConnectors(cameraCtx, hand, HAND_CONNECTIONS, { color: '#00FF66', lineWidth: 2 });
 
       currentMode = detectGesture(hand);
       rawPos.x = (1 - hand[8].x) * window.innerWidth;
       rawPos.y = hand[8].y * window.innerHeight;
 
-      // Initialize positions on first detection frame
       if (smoothPos.x === 0 && smoothPos.y === 0) {
         smoothPos.x = rawPos.x;
         smoothPos.y = rawPos.y;
       }
 
-      // Double Exponential Filter (Velocity-Aware Smoothing)
+      // Double Exponential Velocity Filtering
       const dx = rawPos.x - smoothPos.x;
       const dy = rawPos.y - smoothPos.y;
       const moveDistance = Math.hypot(dx, dy);
@@ -223,13 +224,11 @@
         velocity.x = SMOOTH_BETA * (smoothPos.x - lastSmoothX) + (1 - SMOOTH_BETA) * velocity.x;
         velocity.y = SMOOTH_BETA * (smoothPos.y - lastSmoothY) + (1 - SMOOTH_BETA) * velocity.y;
       } else {
-        // Friction decay when stationary
         velocity.x *= 0.2;
         velocity.y *= 0.2;
       }
     }
 
-    // High-Frequency 60FPS Dedicated Render Engine
     function renderFrame() {
       if (!isHandPresent) {
         statusText.innerText = 'Searching Hand...';
@@ -264,26 +263,22 @@
           clearOverlay.style.display = 'none';
 
           if (currentMode === 'DRAW') {
-            statusText.innerText = 'Writing (Ultra Smooth)';
+            statusText.innerText = 'Writing (Smooth)';
             statusIcon.innerText = '👆';
             pointer.style.background = color;
 
             const currentPt = { x: smoothPos.x, y: smoothPos.y };
             
-            // Check tracking jumps across screen
             if (strokeBuffer.length > 0) {
               const lastPt = strokeBuffer[strokeBuffer.length - 1];
-              if (dist(lastPt, currentPt) > 120) {
-                strokeBuffer = [];
-              }
+              if (dist(lastPt, currentPt) > 120) strokeBuffer = [];
             }
 
-            // Only add point if hand actually moves beyond deadzone
             if (strokeBuffer.length === 0 || dist(strokeBuffer[strokeBuffer.length - 1], currentPt) >= DEADZONE) {
               strokeBuffer.push(currentPt);
             }
 
-            // Continuous Quadratic Bézier Spline Interpolation
+            // Smooth Bézier Curve Spline Engine
             if (strokeBuffer.length >= 2) {
               paintCtx.save();
               paintCtx.beginPath();
@@ -366,6 +361,7 @@
 
     hands.onResults(onResults);
 
+    // Forces front selfie camera on smartphones
     const camera = new Camera(videoElement, {
       onFrame: async () => {
         if (!isProcessing) {
@@ -374,8 +370,9 @@
           isProcessing = false;
         }
       },
-      width: 480,
-      height: 360
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      facingMode: 'user'
     });
 
     camera.start().catch(() => {
